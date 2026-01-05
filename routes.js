@@ -2,6 +2,10 @@ import express from 'express';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 const router = express.Router();
 
@@ -9,8 +13,8 @@ const router = express.Router();
    ENV VALIDATION
 ======================= */
 if (!process.env.JWT_SECRET) {
-  console.error('❌ JWT_SECRET is missing in environment variables');
-  process.exit(1);
+  console.warn('⚠️ JWT_SECRET is missing in environment variables. Auth routes may fail.');
+  // process.exit(1); // optional: comment out so server still runs
 }
 
 /* =======================
@@ -62,37 +66,8 @@ const productSchema = new mongoose.Schema({
 const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
 
 /* =======================
-   AD MODEL
+   AUTH MIDDLEWARE
 ======================= */
-const adSchema = new mongoose.Schema({
-  product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-  shop: { type: mongoose.Schema.Types.ObjectId, ref: 'Shop' },
-  seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  amountPaid: Number,
-  durationDays: Number
-}, { timestamps: true });
-
-const Ad = mongoose.models.Ad || mongoose.model('Ad', adSchema);
-
-/* =======================
-   PAYMENT MODEL
-======================= */
-const paymentSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['ad', 'product'], required: true },
-  targetId: mongoose.Schema.Types.ObjectId,
-  amount: Number,
-  method: { type: String, default: 'manual' },
-  status: { type: String, default: 'completed' }
-}, { timestamps: true });
-
-const Payment = mongoose.models.Payment || mongoose.model('Payment', paymentSchema);
-
-/* =======================
-   AUTH MIDDLEWARES
-======================= */
-
-// REQUIRED AUTH
 const authRequired = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'No token provided' });
@@ -104,7 +79,8 @@ const authRequired = async (req, res, next) => {
 
     req.user = user;
     next();
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(401).json({ message: 'Token invalid or expired' });
   }
 };
@@ -112,8 +88,6 @@ const authRequired = async (req, res, next) => {
 /* =======================
    AUTH ROUTES
 ======================= */
-
-// REGISTER
 router.post('/register', async (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password)
@@ -141,7 +115,6 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// LOGIN
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -170,38 +143,66 @@ router.post('/login', async (req, res) => {
    SHOPS
 ======================= */
 router.post('/shops', authRequired, async (req, res) => {
-  if (req.user.role !== 'seller')
-    return res.status(403).json({ message: 'Seller only' });
+  try {
+    if (req.user.role !== 'seller')
+      return res.status(403).json({ message: 'Seller only' });
 
-  const shop = await Shop.create({
-    ...req.body,
-    owner: req.user._id
-  });
+    const shop = await Shop.create({
+      ...req.body,
+      owner: req.user._id
+    });
 
-  res.json(shop);
+    res.json(shop);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Shop creation failed' });
+  }
 });
 
 router.get('/shops', async (_, res) => {
-  res.json(await Shop.find().populate('owner', 'name email'));
+  try {
+    const shops = await Shop.find().populate('owner', 'name email');
+    res.json(shops);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch shops' });
+  }
 });
 
 /* =======================
    PRODUCTS
 ======================= */
 router.post('/products', authRequired, async (req, res) => {
-  const product = await Product.create({
-    ...req.body,
-    seller: req.user._id
-  });
-  res.json(product);
+  try {
+    if (!req.user)
+      return res.status(401).json({ message: 'Unauthorized' });
+
+    const { name, price } = req.body;
+    if (!name || !price)
+      return res.status(400).json({ message: 'Product name and price are required' });
+
+    const product = await Product.create({
+      ...req.body,
+      seller: req.user._id
+    });
+
+    res.json(product);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Product creation failed' });
+  }
 });
 
 router.get('/products', async (_, res) => {
-  res.json(
-    await Product.find()
+  try {
+    const products = await Product.find()
       .populate('seller', 'name')
-      .populate('shop', 'name logo')
-  );
+      .populate('shop', 'name logo');
+    res.json(products);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch products' });
+  }
 });
 
 export default router;
